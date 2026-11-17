@@ -6,24 +6,47 @@ namespace RegionOcr;
 /// - N초 = 0: 마지막으로 본 값이 2초 이하였던 스킬이 창에서 사라질 때(쿨 종료) 입력
 /// 남은 시간이 다시 늘어나거나(재사용) 쿨 종료로 사라지면 다음 쿨타임을 위해 재무장.
 /// 3초 이상 남았는데 안 보이면(창 이동/가림) 상태를 유지해 다시 보였을 때 중복 입력하지 않음.
+///
+/// 오인식 방지: 쿨타임은 1초씩 줄어드므로, 확정값에서 흐른 시간만큼 줄어든 값(±1.5초)만 바로 확정.
+/// 갑자기 줄거나 늘어난 값은 후보로 두고, 그 값부터 1초씩 줄어드는 흐름이 1.6초 이상 이어질 때만 확정
+/// (= 화면 숫자가 두 번 이상 바뀌어야 함). 같은 숫자 모양을 잘못 읽은 값(예: 57초 → 1초)은 1초 안에 사라져 무시되고,
+/// 그 직후 다시 57초가 읽혀도 '재사용'으로 오인해 한 번 더 입력하지 않음.
 /// </summary>
 public sealed class SkillAutomator
 {
     private sealed class State
     {
         public int? LastSec;           // 확정된 마지막 남은 시간
-        public int PendingSec = -1;    // 확정 대기 값 (같은 값 2회 연속 → 확정)
-        public int PendingCount;
+        public DateTime LastSeenAt;    // 마지막으로 확정값을 본 시각
+        public int CandSec = -1;       // 흐름에서 벗어난 값 (후보)
+        public DateTime CandAt;        // 후보를 처음 본 시각
+        public int CandCount;          // 후보 흐름과 맞는 값을 본 횟수
         public bool Armed = true;      // 이번 쿨타임에 아직 입력 안 함
         public int Absent;             // 연속으로 안 보인 횟수
-        public DateTime LastSeenAt;    // 마지막으로 확정값을 본 시각
     }
 
+    private const double Tolerance = 1.5;                                  // 예상값과의 허용 차이(초)
+    private static readonly TimeSpan CandidateTime = TimeSpan.FromSeconds(1.6); // 후보 확정에 필요한 시간 (첫 확정 제외)
+    private static readonly TimeSpan FirstTime = TimeSpan.FromSeconds(0.4);     // 처음 보는 스킬: 같은 흐름 2회 이상 + 이 시간
+
     private readonly Dictionary<SkillRule, State> _st = new();
+
+    /// <summary>현재 시각 (시험용으로 바꿀 수 있음)</summary>
+    public Func<DateTime> Now { get; set; } = () => DateTime.Now;
 
     public void Reset()
     {
         _st.Clear();
+    }
+
+    /// <summary>후보 흐름 갱신. 반환: 후보가 확정 조건을 채웠는지</summary>
+    private static bool FeedCandidate(State st, int sec, DateTime now, TimeSpan need, int minCount)
+    {
+        bool fits = st.CandSec >= 0 && sec <= st.CandSec
+                    && Math.Abs(sec - (st.CandSec - (now - st.CandAt).TotalSeconds)) <= Tolerance;
+        if (fits) st.CandCount++;
+        else { st.CandSec = sec; st.CandAt = now; st.CandCount = 1; }
+        return st.CandCount >= minCount && now - st.CandAt >= need;
     }
 
     /// <summary>인식 결과로 규칙 판정. 반환: 지금 키를 입력할 규칙</summary>
@@ -37,31 +60,41 @@ public sealed class SkillAutomator
             if (!rule.Enabled) { rule.Status = "꺼짐"; continue; }
 
             var line = FindLine(rule, lines);
+            var now = Now();
             if (line is not null)
             {
                 st.Absent = 0;
-                if (line.Seconds == st.PendingSec) st.PendingCount++;
-                else { st.PendingSec = line.Seconds; st.PendingCount = 1; }
-                if (st.PendingCount < 2) continue; // 오인식 방지
-
                 int sec = line.Seconds;
-                if (st.LastSec is int prev && sec > prev + 1) st.Armed = true; // 재사용 → 새 쿨타임
+                if (st.LastSec is int prev)
+                {
+                    double expect = prev - (now - st.LastSeenAt).TotalSeconds;
+                    bool onTrack = sec <= prev && sec >= expect - Tolerance;
+                    if (!onTrack)
+                    {
+                        // 흐름 이탈: 오인식이거나 재사용(값 증가). 같은 흐름이 이어질 때까지 판정 보류
+                        if (!FeedCandidate(st, sec, now, CandidateTime, 3)) continue;
+                        if (st.CandSec > prev + 1) st.Armed = true; // 확인된 재사용 → 새 쿨타임
+                    }
+                }
+                else if (!FeedCandidate(st, sec, now, FirstTime, 2)) continue; // 처음 보는 값: 같은 흐름 2회 이상
+
+                st.CandSec = -1; st.CandCount = 0;
                 st.LastSec = sec;
-                st.LastSeenAt = DateTime.Now;
+                st.LastSeenAt = now;
                 rule.Status = st.Armed ? $"{sec}초" : $"{sec}초 (입력함)";
                 if (st.Armed && rule.Seconds > 0 && sec <= rule.Seconds) fire.Add(rule);
             }
             else
             {
                 if (!complete) continue; // 판독 못 한 줄이 이 스킬일 수 있음 → 보류
-                st.PendingSec = -1;
-                st.PendingCount = 0;
+                st.CandSec = -1;
+                st.CandCount = 0;
                 if (st.LastSec is null) { rule.Status = "대기"; continue; }
                 if (++st.Absent < 2) continue;
 
                 // 남은 시간이 3초 이상이었는데 안 보임 → 창 이동/가림으로 보고 상태 유지 (다시 보이면 이어서 판정, 중복 입력 방지).
                 // 30초 넘게 안 보이면 초기화
-                if (st.LastSec > 2 && DateTime.Now - st.LastSeenAt < TimeSpan.FromSeconds(30)) { rule.Status = $"안 보임 ({st.LastSec}초)"; continue; }
+                if (st.LastSec > 2 && now - st.LastSeenAt < TimeSpan.FromSeconds(30)) { rule.Status = $"안 보임 ({st.LastSec}초)"; continue; }
 
                 // 쿨 종료로 사라짐 (마지막 값이 2초 이하)
                 if (st.Armed && rule.Seconds == 0 && st.LastSec <= 2) fire.Add(rule);

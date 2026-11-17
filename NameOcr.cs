@@ -1,4 +1,4 @@
-using System.Drawing.Drawing2D;
+﻿using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Text.RegularExpressions;
 using RapidOcrNet;
@@ -21,7 +21,6 @@ public static class NameOcr
     private static TextRecognizer? _rec;
     private static bool _tried, _recTried;
     private static readonly RapidOcrOptions Options = RapidOcrOptions.Default with { DoAngle = false };
-    private static readonly Regex DigitsRx = new(@"\d{1,4}", RegexOptions.Compiled);
 
     private static string ModelDir => Path.Combine(AppContext.BaseDirectory, "models", "v5");
     private static string RecModel => Path.Combine(ModelDir, "korean_PP-OCRv5_rec_mobile.onnx");
@@ -94,17 +93,29 @@ public static class NameOcr
         }
     }
 
-    /// <summary>원본 색상 "N초" 영역에서 숫자 N. 숫자가 없거나 엔진을 못 쓰면 null</summary>
-    public static int? ReadSeconds(Bitmap rawNumber)
+    /// <summary>
+    /// 원본 색상 "N초" 영역에서 숫자 부분 문자열(예: "81").
+    /// 끝의 한글('초')은 떼고, 숫자와 헷갈리는 영문만 숫자로 바꿈(B→8, O→0, I·l·|→1, S→5, Z→2).
+    /// 그 밖의 글자가 섞이면 null — 예전에는 숫자만 골라 써서 "81초"를 "B1초"로 읽으면 1초로 오판했음.
+    /// </summary>
+    public static string? ReadSecondsText(Bitmap rawNumber)
     {
         lock (Gate)
         {
             var rec = Recognizer();
             if (rec is null) return null;
             using var sk = ToSkia3x(rawNumber);
-            string text = string.Concat(rec.GetTextLine(sk, CancellationToken.None).Chars ?? []);
-            var m = DigitsRx.Match(text);
-            return m.Success ? int.Parse(m.Value) : null;
+            string text = new(string.Concat(rec.GetTextLine(sk, CancellationToken.None).Chars ?? []).Where(c => !char.IsWhiteSpace(c)).ToArray());
+            int end = text.Length;
+            while (end > 0 && text[end - 1] is >= '가' and <= '힣' && text.Length - end < 2) end--;
+            var sb = new System.Text.StringBuilder();
+            foreach (char c in text[..end])
+            {
+                char d = c switch { 'B' => '8', 'O' or 'o' => '0', 'I' or 'l' or '|' => '1', 'S' => '5', 'Z' => '2', _ => c };
+                if (d is < '0' or > '9') return null;
+                sb.Append(d);
+            }
+            return sb.Length is >= 1 and <= 4 ? sb.ToString() : null;
         }
     }
 

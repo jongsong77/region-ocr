@@ -266,10 +266,24 @@ public sealed class CooldownReader
         if (_secCache.TryGetValue(key, out var cached)) return cached;
         if (numRect.Width <= 0 || numRect.Height <= 0) return null;
         using var raw = shot.Clone(numRect, PixelFormat.Format32bppArgb);
-        int? v = await Task.Run(() => NameOcr.ReadSeconds(raw));
+        string? digits = await Task.Run(() => NameOcr.ReadSecondsText(raw));
+        // 템플릿 글자 나눔과 맞춰 봄: 글자 수 = 숫자 수 + 1('초'), 템플릿이 확실히 읽은 자리는 같은 숫자여야 함.
+        // 안 맞으면 판독 보류 (잘못 읽은 값으로 키를 누르지 않도록)
+        int? v = digits is not null && MatchesTemplate(digits, _digits.Templates.Count > 0 ? _digits.Recognize(num) : null)
+            ? int.Parse(digits) : null;
         if (_secCache.Count >= 2000) _secCache.Clear();
         _secCache[key] = v;
         return v;
+    }
+
+    /// <summary>OCR 숫자와 템플릿 판독(예: "?1?" = 숫자 2개 + 초, 둘째 자리 1)이 서로 맞는지. 템플릿이 없으면 통과</summary>
+    private static bool MatchesTemplate(string digits, string? tpl)
+    {
+        if (string.IsNullOrEmpty(tpl)) return true;
+        if (tpl.Length != digits.Length + 1) return false;
+        for (int i = 0; i < digits.Length; i++)
+            if (char.IsDigit(tpl[i]) && tpl[i] != digits[i]) return false;
+        return true;
     }
 
     /// <summary>수동 학습: 마지막 읽기의 index번째 줄 숫자 부분을 정답으로 학습</summary>
