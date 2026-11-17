@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <!-- Windows.Media.Ocr(WinRT) 사용을 위해 Windows SDK TFM 지정 -->
+    <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- 멀티 모니터/배율 환경에서 물리 픽셀 좌표로 캡처하기 위해 PerMonitorV2 -->
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <AssemblyName>RegionOcr</AssemblyName>
+    <RootNamespace>RegionOcr</RootNamespace>
+  </PropertyGroup>
+
+</Project>

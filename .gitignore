@@ -1,0 +1,10 @@
+# 빌드 산출물
+bin/
+obj/
+# 배포본·백업 (exe, 실행 로그, 개인 설정 포함)
+dist/
+backup/
+# IDE
+.vs/
+.idea/
+*.user
