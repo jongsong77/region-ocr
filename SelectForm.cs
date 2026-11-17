@@ -1,4 +1,4 @@
-namespace RegionOcr;
+﻿namespace RegionOcr;
 
 /// <summary>전체 화면(모든 모니터)을 덮고 마우스 드래그로 영역을 지정하는 오버레이</summary>
 public sealed class SelectForm : Form
@@ -15,6 +15,7 @@ public sealed class SelectForm : Form
 
     public SelectForm()
     {
+        CaptureGuard.Attach(this); // 화면 캡처에서 제외 (게임 위에 겹쳐도 인식에 섞이지 않게)
         _virtual = SystemInformation.VirtualScreen;
         _shot = new Bitmap(_virtual.Width, _virtual.Height);
         using (var g = Graphics.FromImage(_shot))

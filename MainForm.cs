@@ -88,6 +88,7 @@ public sealed class MainForm : Form
 
     public MainForm()
     {
+        CaptureGuard.Attach(this); // 화면 캡처에서 제외 (게임 위에 겹쳐도 인식에 섞이지 않게)
         Text = "Region OCR";
         Font = new Font("맑은 고딕", 9f);
         StartPosition = FormStartPosition.CenterScreen;
@@ -1199,6 +1200,7 @@ public sealed class MainForm : Form
             Text = title, FormBorderStyle = FormBorderStyle.FixedDialog, StartPosition = FormStartPosition.CenterParent,
             ClientSize = new Size(360, 110), MinimizeBox = false, MaximizeBox = false, Font = new Font("맑은 고딕", 9f)
         };
+        CaptureGuard.Attach(f);
         var lbl = new Label { Text = prompt, Left = 12, Top = 12, AutoSize = true };
         var tb = new TextBox { Text = initial, Left = 12, Top = 36, Width = 336 };
         var ok = new Button { Text = "확인", DialogResult = DialogResult.OK, Left = 192, Top = 72, Width = 75 };

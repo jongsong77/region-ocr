@@ -1,4 +1,4 @@
-using System.Drawing.Drawing2D;
+﻿using System.Drawing.Drawing2D;
 
 namespace RegionOcr;
 
@@ -19,6 +19,7 @@ public sealed class GraphForm : Form
 
     public GraphForm(HuntTracker hunt)
     {
+        CaptureGuard.Attach(this); // 화면 캡처에서 제외 (게임 위에 겹쳐도 인식에 섞이지 않게)
         _hunt = hunt;
         Text = "경험치 그래프";
         Font = Theme.Font;

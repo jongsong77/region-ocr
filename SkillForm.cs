@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 
 namespace RegionOcr;
 
@@ -18,6 +18,7 @@ public sealed class SkillForm : Form
 
     public SkillForm(BindingList<SkillRule> rules, Action save, CooldownReader reader)
     {
+        CaptureGuard.Attach(this); // 화면 캡처에서 제외 (게임 위에 겹쳐도 인식에 섞이지 않게)
         _rules = rules;
         _save = save;
         _reader = reader;
@@ -174,6 +175,7 @@ public sealed class SkillForm : Form
             MinimizeBox = false, MaximizeBox = false, ShowInTaskbar = false, Font = Font,
             ClientSize = new Size(Math.Max(300, img.Width + 24), img.Height + 110),
         };
+        CaptureGuard.Attach(dlg);
         var pic = new PictureBox { Image = img, SizeMode = PictureBoxSizeMode.CenterImage, Dock = DockStyle.Top, Height = img.Height + 12 };
         var lbl = new Label { Text = "위 그림의 숫자(초)를 입력하세요", Dock = DockStyle.Top, Height = 24, Padding = new Padding(8, 4, 0, 0) };
         var num = new NumericUpDown { Minimum = 0, Maximum = 9999, Width = 90, Left = 10, Top = img.Height + 50 };
