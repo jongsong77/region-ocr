@@ -24,7 +24,7 @@ public sealed class MainForm : Form
     [
         ("state", "상태·경과 시간"), ("hpmp", "HP/MP"), ("startExp", "시작 경험치"), ("curExp", "현재 경험치"),
         ("gained", "누적 EXP"), ("perMin", "분당 EXP"), ("perHour", "시간당 EXP"), ("hourly", "시간별 누적"),
-        ("mpAuto", "MP 자동 입력 횟수"), ("warn", "인식 불가 경고"),
+        ("mpAuto", "MP 자동 입력 횟수"), ("skill", "스킬 자동 입력"), ("warn", "인식 불가 경고"),
     ];
     private bool ShowItem(string key) => !_cfg.OverlayHidden.Contains(key);
     private static readonly string[] Roles = ["", "HP", "MP", "EXP"];
@@ -71,8 +71,20 @@ public sealed class MainForm : Form
     private Rectangle _lastClient;            // 마지막으로 본 게임 창 클라이언트 영역 (변경 감지용)
     private string _lastAutoMsg = "";
 
+    // ---- 스킬 쿨타임(애드온 창) 자동 입력
+    private readonly BindingList<SkillRule> _skillRules;
+    private readonly CooldownReader? _skillReader;
+    private readonly SkillAutomator _skillAuto = new();
+    private readonly System.Windows.Forms.Timer _skillTimer = new() { Interval = 250 };
+    private readonly CheckBox _skillEnabled = new();
+    private readonly Label _skillInfo = new();
+    private SkillForm? _skillForm;
+    private bool _skillBusy;
+    private int _skillKeyCount;
+    private string _skillMsg = "";
+
     private static string LogDir => Path.Combine(AppContext.BaseDirectory, "logs");
-    private const int CompactHeight = 214, SettingsHeight = 700, CompactWidth = 430, SettingsWidth = 760;
+    private const int CompactHeight = 244, SettingsHeight = 700, CompactWidth = 430, SettingsWidth = 760;
 
     public MainForm()
     {
@@ -86,6 +98,7 @@ public sealed class MainForm : Form
         _regions = new BindingList<RegionItem>(_cfg.Regions);
         _hunt.Log += AppLog.Write;
         AppLog.Write($"프로그램 시작 (시작/일시정지 {_cfg.StartHotkey}, 중지 {_cfg.ResetHotkey})");
+        _skillRules = new BindingList<SkillRule>(_cfg.SkillRules);
         _matcher.Load();
         BuildUi();
         Theme.Apply(this);       // 디스코드 스타일 다크 테마
@@ -94,8 +107,13 @@ public sealed class MainForm : Form
 
         try { _ocr = new OcrService(); }
         catch { /* OCR 언어팩이 없어도 글자색(템플릿 매칭) 영역은 동작 */ }
+        // 쿨타임 인식은 Windows OCR 없이도 동작 (PaddleOCR + 픽셀 비교). 있으면 표시 이름 예비 판독에만 사용
+        _skillReader = new CooldownReader(_ocr);
+        AppLog.Write(_ocr is null ? "Windows OCR 없음 (한국어 언어팩 없음) → 쿨타임 인식은 PaddleOCR로만 동작" : $"Windows OCR 사용 가능 ({_ocr.LanguageTag})");
 
         _timer.Tick += async (_, _) => await ReadAllAsync();
+        _skillTimer.Tick += async (_, _) => await SkillTickAsync();
+        _skillTimer.Start();
 
         // 오버레이: 저장된 위치에 표시, 이동 시 위치 저장
         _overlay.Location = new Point(_cfg.OverlayX, _cfg.OverlayY);
@@ -193,7 +211,23 @@ public sealed class MainForm : Form
         mpRow.Controls.Add(_mpKey);
         mpRow.Controls.Add(new Label { Text = "키 자동 입력", AutoSize = true, Margin = new Padding(2, 6, 2, 0) });
 
-        // ---- 5줄: 자동 입력 상태 + 그래프/오버레이/중지
+        // ---- 5줄: 스킬 쿨타임 자동 입력
+        var skillRow = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 30, Padding = new Padding(6, 2, 6, 0), WrapContents = false };
+        _skillEnabled.Text = "스킬 자동"; _skillEnabled.AutoSize = true; _skillEnabled.Margin = new Padding(3, 5, 0, 0);
+        _skillEnabled.Checked = _cfg.SkillAutoEnabled;
+        _skillEnabled.CheckedChanged += (_, _) =>
+        {
+            _cfg.SkillAutoEnabled = _skillEnabled.Checked; _skillAuto.Reset(); SaveConfig(); UpdateSkillInfo();
+            AppLog.Write($"스킬 자동 {(_skillEnabled.Checked ? "켬" : "끔")} (규칙 {_skillRules.Count(r => r.Enabled)}개)");
+        };
+        var skillBtn = new Button { Text = "스킬 설정", AutoSize = true, Margin = new Padding(6, 1, 0, 0) };
+        skillBtn.Click += (_, _) => ShowSkillForm();
+        _skillInfo.AutoSize = true; _skillInfo.ForeColor = Theme.Yellow; _skillInfo.Margin = new Padding(6, 6, 0, 0);
+        skillRow.Controls.Add(_skillEnabled);
+        skillRow.Controls.Add(skillBtn);
+        skillRow.Controls.Add(_skillInfo);
+
+        // ---- 6줄: 자동 입력 상태 + 그래프/오버레이/중지
         var bottomRow = new TableLayoutPanel { Dock = DockStyle.Top, Height = 32, ColumnCount = 4, Padding = new Padding(8, 0, 8, 0) };
         bottomRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         bottomRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -223,6 +257,7 @@ public sealed class MainForm : Form
         // Dock=Top은 나중에 추가한 것이 위로 감 → 역순으로 추가
         Controls.Add(_settings);
         Controls.Add(bottomRow);
+        Controls.Add(skillRow);
         Controls.Add(mpRow);
         Controls.Add(info);
         Controls.Add(top);
@@ -462,6 +497,7 @@ public sealed class MainForm : Form
         string summary = $"경과 {_hunt.Elapsed:hh\\:mm\\:ss}, 누적 {_hunt.Gained:+#,0;-#,0;0}";
         _timer.Stop();
         _hunt.Reset();
+        _skillAuto.Reset();
         AppLog.Write($"중지({source}): 사냥 기록 초기화 ({summary})" + (wasRunning ? ", 읽기 멈춤" : ""));
         UpdateStartButton();
         UpdateDisplay();
@@ -510,6 +546,7 @@ public sealed class MainForm : Form
             _timer.Interval = (int)_interval.Value;
             _timer.Start();
             if (ByRole("EXP") is not null) _hunt.Start();
+            _skillAuto.Reset();
             AppLog.Write($"{(resume ? "재개" : "시작")}({source}): 현재 EXP 다시 읽는 중" + (ByRole("EXP") is null ? " (EXP 영역 없음)" : ""));
             _ = ReadAllAsync(force: true);
         }
@@ -858,6 +895,96 @@ public sealed class MainForm : Form
     }
 
     // =====================================================================
+    // 스킬 쿨타임(애드온 창) 자동 입력
+    // =====================================================================
+
+    private void ShowSkillForm()
+    {
+        if (_skillReader is null) return;
+        _skillForm ??= new SkillForm(_skillRules, SaveConfig, _skillReader);
+        if (!_skillForm.Visible) _skillForm.Show(this);
+        _skillForm.Activate();
+    }
+
+    /// <summary>
+    /// 250ms마다: 애드온 창 읽기 → 규칙 판정 → 키 입력.
+    /// 실행 중(▶ 시작) + 스킬 자동 체크일 때만 입력, 설정 창이 열려 있으면 인식만 계속(확인용)
+    /// </summary>
+    private async Task SkillTickAsync()
+    {
+        bool running = _timer.Enabled && _skillEnabled.Checked;
+        bool formOpen = _skillForm is { Visible: true };
+        if (_skillBusy || _skillReader is null || (!running && !formOpen)) return;
+        if (string.IsNullOrEmpty(_cfg.GameTitle) || _cfg.RefCanvasW <= 0) { SetSkillMsg("게임 창 기준 없음"); return; }
+
+        _skillBusy = true;
+        try
+        {
+            var canvas = _cfg.RefCanvas;
+            var lines = await _skillReader.ReadAsync(canvas);
+            _skillForm?.UpdateLive(lines, _skillReader.LastComplete, _skillReader.Preview, _skillReader.LearnedChars);
+            if (!running) return;
+            SkillLog(lines is null ? "애드온 창 못 찾음 (쿨타임이 하나 이상 떠 있어야 찾음)"
+                                   : $"애드온 창 인식: {string.Join(", ", lines.Select(l => $"{l.Name} {(l.Seconds >= 0 ? l.Seconds + "초" : "?초")}"))}", stateOnly: true);
+            if (lines is null) { SetSkillMsg("애드온 창 찾는 중"); return; }
+            if (_skillRules.Count == 0) { SetSkillMsg("규칙 없음 → 스킬 설정"); return; }
+
+            foreach (var rule in _skillAuto.Evaluate(_skillRules, lines, _skillReader.LastComplete))
+            {
+                var key = KeyUtil.Parse(rule.Key) & Keys.KeyCode;
+                if (key == Keys.None) { SetSkillMsg($"⚠ {rule.Name} 키 미지정"); SkillLog($"{rule.Name}: 키 미지정 → 입력 안 함"); continue; }
+                if (!KeySender.IsGameForeground(new Point(canvas.X + canvas.Width / 2, canvas.Y + canvas.Height / 2)))
+                {
+                    SetSkillMsg("게임 창 비활성 → 입력 안 함");
+                    SkillLog($"{rule.Name}: 게임 창 비활성 → 입력 보류");
+                    continue;
+                }
+                await KeySender.PressAsync(key);
+                _skillAuto.MarkFired(rule);
+                _skillKeyCount++;
+                SetSkillMsg($"{rule.Name}→{KeyUtil.Format(key)} {DateTime.Now:HH:mm:ss}");
+                var line = SkillAutomator.FindLine(rule, lines);
+                AppLog.Write($"스킬 입력: {rule.Name} 남은 {(line is null ? "(창에서 사라짐)" : line.Seconds + "초")} ≤ {rule.Seconds}초 → {KeyUtil.Format(key)} ({_skillKeyCount}회)");
+                await Task.Delay(60); // 여러 스킬이 동시에 걸리면 간격을 두고 차례로
+            }
+        }
+        catch (Exception ex) { SetSkillMsg("오류: " + ex.Message); SkillLog("스킬 인식 오류: " + ex.Message); }
+        finally { _skillBusy = false; }
+    }
+
+    private string _lastSkillLog = "";
+    private bool? _lastAddonFound;
+
+    /// <summary>
+    /// 스킬 동작 기록 (같은 내용 반복은 생략).
+    /// stateOnly: 애드온 창 찾음/못 찾음이 바뀔 때만 기록 (매 250ms 인식 결과를 다 남기지 않음)
+    /// </summary>
+    private void SkillLog(string msg, bool stateOnly = false)
+    {
+        if (stateOnly)
+        {
+            bool found = !msg.StartsWith("애드온 창 못 찾음");
+            if (_lastAddonFound == found) return;
+            _lastAddonFound = found;
+        }
+        else if (msg == _lastSkillLog) return;
+        else _lastSkillLog = msg;
+        AppLog.Write(msg);
+    }
+
+    private void SetSkillMsg(string msg)
+    {
+        _skillMsg = msg;
+        UpdateSkillInfo();
+    }
+
+    private void UpdateSkillInfo()
+    {
+        string text = _skillEnabled.Checked ? $"{_skillKeyCount}회  {_skillMsg}" : "";
+        if (_skillInfo.Text != text) _skillInfo.Text = text;
+    }
+
+    // =====================================================================
     // 표시 (기본 화면 + 오버레이)
     // =====================================================================
 
@@ -970,6 +1097,7 @@ public sealed class MainForm : Form
                 Add($"{hour:HH}시  {gained:+#,0;-#,0;0}");
         }
         if (ShowItem("mpAuto") && _mpAuto.Checked) Add($"MP 자동: {_mpKey.Text} {_keyCount}회", Theme.Muted);
+        if (ShowItem("skill") && _skillEnabled.Checked) Add($"스킬 자동: {_skillKeyCount}회  {_skillMsg}", Theme.Muted);
         if (ShowItem("warn") && _timer.Enabled && UnreadableRoles() is { Count: > 0 } bad)
             Add($"⚠ 인식 불가: {string.Join(", ", bad)}", Theme.Yellow);
         if (lines.Count == 0) Add("(표시 항목 없음)", Theme.Muted);

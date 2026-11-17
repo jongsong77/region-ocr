@@ -65,6 +65,21 @@ public sealed class RegionItem
     }
 }
 
+/// <summary>스킬 쿨타임 자동 입력 규칙: [스킬] 남은 시간이 [초] 이하가 되면 [키] 1회 입력</summary>
+public sealed class SkillRule
+{
+    public bool Enabled { get; set; } = true;
+    public string Name { get; set; } = "";     // 표시 이름 (사용자 입력)
+    public string OcrName { get; set; } = "";  // 등록 당시 OCR이 읽은 이름 (참고용, 픽셀 글꼴이라 매번 다를 수 있음)
+    public string NameKey { get; set; } = "";  // 이름 부분 픽셀 모양 지문 (실제 비교 기준)
+
+    [JsonIgnore] public string Shape => NameKey.Length > 0 ? "등록됨" : "없음";
+    public int Seconds { get; set; } = 1;      // 0 = 쿨이 끝나 창에서 사라질 때
+    public string Key { get; set; } = "";
+
+    [JsonIgnore] public string Status { get; set; } = "";
+}
+
 /// <summary>설정 파일(config.json) 저장/로드</summary>
 public sealed class AppConfig
 {
@@ -106,6 +121,10 @@ public sealed class AppConfig
     public int OverlayX { get; set; } = 100;
     public int OverlayY { get; set; } = 100;
     public List<RegionItem> Regions { get; set; } = new();
+
+    // 스킬 쿨타임(애드온 창) 자동 입력
+    public bool SkillAutoEnabled { get; set; }
+    public List<SkillRule> SkillRules { get; set; } = new();
 
     private static string FilePath => Path.Combine(AppContext.BaseDirectory, "config.json");
     private static readonly JsonSerializerOptions Opt = new() { WriteIndented = true };

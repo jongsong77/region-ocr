@@ -1,4 +1,4 @@
-﻿using System.Drawing.Drawing2D;
+using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -89,6 +89,25 @@ public sealed class OcrService
             writer.DetachBuffer(), BitmapPixelFormat.Bgra8, bmp.Width, bmp.Height, BitmapAlphaMode.Premultiplied);
         var result = await _engine.RecognizeAsync(sb);
         return string.Join("\n", result.Lines.Select(l => l.Text));
+    }
+
+    /// <summary>OCR 수행 후 줄별 텍스트와 위치(입력 이미지 좌표) 반환</summary>
+    public async Task<List<(string text, RectangleF rect)>> RecognizeLinesAsync(Bitmap bmp)
+    {
+        var writer = new DataWriter();
+        writer.WriteBytes(ReadPixels(bmp));
+        using var sb = SoftwareBitmap.CreateCopyFromBuffer(
+            writer.DetachBuffer(), BitmapPixelFormat.Bgra8, bmp.Width, bmp.Height, BitmapAlphaMode.Premultiplied);
+        var result = await _engine.RecognizeAsync(sb);
+        var lines = new List<(string, RectangleF)>();
+        foreach (var l in result.Lines)
+        {
+            var rs = l.Words.Select(w => w.BoundingRect).ToList();
+            float x0 = (float)rs.Min(r => r.X), y0 = (float)rs.Min(r => r.Y);
+            float x1 = (float)rs.Max(r => r.X + r.Width), y1 = (float)rs.Max(r => r.Y + r.Height);
+            lines.Add((l.Text, RectangleF.FromLTRB(x0, y0, x1, y1)));
+        }
+        return lines;
     }
 
     // 부호는 앞이 숫자/영문이 아닐 때만 인정(날짜 2026-11-11 의 '-' 제외), 영문 바로 뒤 숫자는 제외(MB→M3 오인식 등)

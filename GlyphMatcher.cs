@@ -1,4 +1,4 @@
-﻿using System.Drawing.Imaging;
+using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -29,10 +29,21 @@ public sealed class GlyphMatcher
     private const double MatchThreshold = 0.60; // 1순위 점수가 이 미만이면 '?'
     private const double MinMargin = 0.05;      // 1순위와 2순위(다른 글자) 점수 차가 이 미만이면 '?'
     private const int EdgeMargin = 3;           // 영역 좌우 최소 여백(px) = 글자 간격 이상
-    private static string FilePath => Path.Combine(AppContext.BaseDirectory, "templates.json");
+    private const string DefaultFile = "templates.json";
+    private readonly string _file;
+    private string FilePath => Path.Combine(AppContext.BaseDirectory, _file);
     private static readonly JsonSerializerOptions Opt = new() { WriteIndented = true };
 
     public List<Template> Templates { get; private set; } = new();
+
+    /// <summary>1순위 최소 점수. 학습 안 된 글자를 닮은 글자로 오인하지 않으려면 높게</summary>
+    public double MinScore { get; init; } = MatchThreshold;
+
+    /// <param name="file">학습 파일 이름 (실행 폴더 기준). 글꼴별로 따로 관리</param>
+    public GlyphMatcher(string file = DefaultFile) => _file = file;
+
+    /// <summary>글자 분리 후 글자 수 (잡티 제외)</summary>
+    public static int CountGlyphs(bool[,] mask) => Segment(mask).Count;
 
     public void Load()
     {
@@ -48,7 +59,14 @@ public sealed class GlyphMatcher
     public void Save() => File.WriteAllText(FilePath, JsonSerializer.Serialize(Templates, Opt));
 
     /// <summary>templates.json 수정 시각 (외부에서 학습 파일이 바뀌면 다시 읽기 위함)</summary>
-    public static DateTime FileStamp => File.Exists(FilePath) ? File.GetLastWriteTimeUtc(FilePath) : DateTime.MinValue;
+    public static DateTime FileStamp
+    {
+        get
+        {
+            string path = Path.Combine(AppContext.BaseDirectory, DefaultFile);
+            return File.Exists(path) ? File.GetLastWriteTimeUtc(path) : DateTime.MinValue;
+        }
+    }
 
     // ---------------- 색상 키잉
 
@@ -142,7 +160,7 @@ public sealed class GlyphMatcher
                 .Select(grp => (ch: grp.Key, s: grp.Max(t => Score(g, t))))
                 .OrderByDescending(v => v.s).ToList();
             double first = ranked.Count > 0 ? ranked[0].s : 0, second = ranked.Count > 1 ? ranked[1].s : 0;
-            sb.Append(first >= MatchThreshold && first - second >= MinMargin ? ranked[0].ch : '?');
+            sb.Append(first >= MinScore && first - second >= MinMargin ? ranked[0].ch : '?');
         }
         return sb.ToString();
     }

@@ -14,4 +14,24 @@
     <RootNamespace>RegionOcr</RootNamespace>
   </PropertyGroup>
 
+  <!-- 스킬 이름 표시용 한글 OCR: PaddleOCR PP-OCRv5 (ONNX). 검출·방향 모델은 패키지가 models\v5에 복사 -->
+  <ItemGroup>
+    <PackageReference Include="RapidOcrNet" Version="4.2.0" />
+  </ItemGroup>
+
+  <!-- 한국어 인식 모델·사전 (RapidAI/RapidOCR v3.10.0 배포본, Apache-2.0) → 실행 폴더 models\v5 -->
+  <ItemGroup>
+    <None Update="models\korean_PP-OCRv5_rec_mobile.onnx;models\ppocrv5_korean_dict.txt">
+      <Link>models\v5\%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+    </None>
+  </ItemGroup>
+
+  <!-- 패키지 기본 라틴 인식 모델은 쓰지 않으므로 배포 폴더에서 제거 (약 8MB) -->
+  <Target Name="RemoveUnusedOcrModels" AfterTargets="CopyModelsPublish">
+    <Delete Files="$(PublishDir)models\v5\latin_PP-OCRv5_rec_mobile_infer.onnx;$(PublishDir)models\v5\ppocrv5_latin_dict.txt;$(PublishDir)onnxruntime.lib;$(PublishDir)onnxruntime_providers_shared.lib" />
+  </Target>
+
 </Project>
